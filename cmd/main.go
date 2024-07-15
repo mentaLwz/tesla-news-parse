@@ -20,7 +20,7 @@ func task() {
 
 func engine() {
 	newsDuration := viper.GetInt("NEWS_DURATION_HOUR")
-	ticker := time.NewTicker(time.Duration(newsDuration) * time.Minute)
+	ticker := time.NewTicker(time.Duration(newsDuration) * time.Hour)
 	defer ticker.Stop()
 	for t := range ticker.C {
 		log.Println("Ticker触发时间:", t)

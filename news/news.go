@@ -28,7 +28,7 @@ func CollectNews(topic string, durationHour int) []NewsItem {
 		newsapi.WithLanguage(newsapi.LanguageEnglish),
 		newsapi.WithLocation(newsapi.LocationUnitedStates),
 		newsapi.WithLimit(30),
-		newsapi.WithStartDate(time.Now().Add(-time.Hour * time.Duration(durationHour*72))),
+		newsapi.WithStartDate(time.Now().Add(-time.Hour * time.Duration(durationHour))),
 		newsapi.WithEndDate(time.Now()),
 	}
 	handler.SetQueryOptions(queryOptions...)
