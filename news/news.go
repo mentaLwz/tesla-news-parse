@@ -2,8 +2,14 @@ package news
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
 	"log"
+	"net/http"
+	"net/url"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Zhima-Mochi/newsApi-go/newsapi"
 	ai "github.com/mentaLwz/tesla-news-parse/ai"
@@ -20,6 +26,87 @@ type NewsItem struct {
 	Source string     `bson:"source,omitempty"`
 	Score  string     `bson:"score"`
 	guid   string
+}
+
+func getOriginUrl(googleURL string) string {
+
+	// 解析URL
+	parsedURL, err := url.Parse(googleURL)
+	if err != nil {
+		fmt.Println("Error parsing URL:", err)
+		return ""
+	}
+
+	// 从路径中提取编码的部分
+	parts := strings.Split(parsedURL.Path, "/")
+	if len(parts) < 3 {
+		fmt.Println("Invalid URL format")
+		return ""
+	}
+	encodedPart := parts[len(parts)-1] // 取最后一个部分
+	fmt.Println("Encoded part:", encodedPart)
+
+	// 解码Base64URL
+	decodedBytes, err := base64.RawURLEncoding.DecodeString(encodedPart)
+	if err != nil {
+		fmt.Println("Error decoding base64:", err)
+		return ""
+	}
+	decodedURL := string(decodedBytes)
+	fmt.Println("Decoded URL:", decodedURL)
+
+	// 清理解码后的URL
+	originalURL := cleanURL(decodedURL)
+	fmt.Println("原始链接:", originalURL)
+
+	// 发送HTTP请求以处理可能的重定向
+	resp, err := http.Get(originalURL)
+	if err != nil {
+		fmt.Println("Error sending HTTP request:", err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	fmt.Println("最终链接:", resp.Request.URL.String())
+	return resp.Request.URL.String()
+}
+
+func findAllIndex(s, substr string) []int {
+	var indices []int
+	for i := 0; i < len(s); {
+		j := strings.Index(s[i:], substr)
+		if j == -1 {
+			break
+		}
+		indices = append(indices, i+j)
+		i += j + 1
+	}
+	return indices
+}
+
+func cleanURL(input string) string {
+	// 查找所有 "http" 的位置
+	httpIndices := findAllIndex(input, "http")
+
+	if len(httpIndices) == 0 {
+		return ""
+	}
+
+	// 选择第一个 "http" 位置（非AMP版本）
+	startIndex := httpIndices[0]
+
+	// 从选定的 "http" 开始截取字符串
+	input = input[startIndex:]
+
+	// 移除所有非打印字符和空白字符
+	input = strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) && !unicode.IsSpace(r) {
+			return r
+		}
+		return -1
+	}, input)
+	input = strings.TrimSuffix(input, "�")
+	return input
 }
 
 func CollectNews(topic string, durationHour int) []NewsItem {
@@ -42,6 +129,8 @@ func CollectNews(topic string, durationHour int) []NewsItem {
 
 	var newsCollections []NewsItem
 	for _, news := range newsList {
+
+		news.SourceLink = getOriginUrl(news.Link)
 		newsapi.FetchSourceContents([]*newsapi.News{news})
 
 		if true {
