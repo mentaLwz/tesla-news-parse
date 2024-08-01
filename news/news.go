@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -28,47 +29,118 @@ type NewsItem struct {
 	guid   string
 }
 
-func getOriginUrl(googleURL string) string {
+func fetchDecodedBatchExecute(id string) (string, error) {
+	s := `[[["Fbv4je","[\"garturlreq\",[[\"en-US\",\"US\",[\"FINANCE_TOP_INDICES\",\"WEB_TEST_1_0_0\"],` +
+		`null,null,1,1,\"US:en\",null,180,null,null,null,null,null,0,null,null,[1608992183,723341000]],` +
+		`\"en-US\",\"US\",1,[2,3,4,8],1,0,\"655000234\",0,0,null,0],\"` + id + `\"]",null,"generic"]]]`
 
-	// 解析URL
-	parsedURL, err := url.Parse(googleURL)
+	data := url.Values{}
+	data.Set("f.req", s)
+
+	client := &http.Client{}
+	req, err := http.NewRequest("POST", "https://news.google.com/_/DotsSplashUi/data/batchexecute?rpcids=Fbv4je", strings.NewReader(data.Encode()))
 	if err != nil {
-		fmt.Println("Error parsing URL:", err)
-		return ""
+		return "", err
 	}
 
-	// 从路径中提取编码的部分
-	parts := strings.Split(parsedURL.Path, "/")
-	if len(parts) < 3 {
-		fmt.Println("Invalid URL format")
-		return ""
-	}
-	encodedPart := parts[len(parts)-1] // 取最后一个部分
-	fmt.Println("Encoded part:", encodedPart)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded;charset=utf-8")
+	req.Header.Add("Referer", "https://news.google.com/")
 
-	// 解码Base64URL
-	decodedBytes, err := base64.RawURLEncoding.DecodeString(encodedPart)
+	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("Error decoding base64:", err)
-		return ""
-	}
-	decodedURL := string(decodedBytes)
-	fmt.Println("Decoded URL:", decodedURL)
-
-	// 清理解码后的URL
-	originalURL := cleanURL(decodedURL)
-	fmt.Println("原始链接:", originalURL)
-
-	// 发送HTTP请求以处理可能的重定向
-	resp, err := http.Get(originalURL)
-	if err != nil {
-		fmt.Println("Error sending HTTP request:", err)
-		return ""
+		return "", err
 	}
 	defer resp.Body.Close()
 
-	fmt.Println("最终链接:", resp.Request.URL.String())
-	return resp.Request.URL.String()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("failed to fetch data from Google")
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	text := string(body)
+	header := `[\"garturlres\",\"`
+	footer := `\",`
+
+	if !strings.Contains(text, header) {
+		return "", fmt.Errorf("header not found in response: %s", text)
+	}
+
+	parts := strings.SplitN(text, header, 2)
+	if len(parts) < 2 {
+		return "", fmt.Errorf("header not found in response")
+	}
+
+	start := parts[1]
+	if !strings.Contains(start, footer) {
+		return "", fmt.Errorf("footer not found in response")
+	}
+
+	urlParts := strings.SplitN(start, footer, 2)
+	if len(urlParts) < 2 {
+		return "", fmt.Errorf("URL not found in response")
+	}
+
+	return urlParts[0], nil
+}
+
+func decodeGoogleNewsURL(sourceURL string) (string, error) {
+	parsedURL, err := url.Parse(sourceURL)
+	if err != nil {
+		return "", err
+	}
+
+	path := strings.Split(parsedURL.Path, "/")
+	if parsedURL.Hostname() == "news.google.com" && len(path) > 1 && path[len(path)-2] == "articles" {
+		base64Str := path[len(path)-1]
+
+		// 移除可能的 URL 查询参数
+		base64Str = strings.Split(base64Str, "?")[0]
+
+		// 调整 base64 字符串长度为 4 的倍数
+		if len(base64Str)%4 != 0 {
+			base64Str += strings.Repeat("=", 4-len(base64Str)%4)
+		}
+
+		decodedBytes, err := base64.URLEncoding.DecodeString(base64Str)
+		if err != nil {
+			return "", fmt.Errorf("base64 decode error: %v", err)
+		}
+
+		decodedStr := string(decodedBytes)
+		prefix := "\x08\x13\x22"
+		suffix := "\xd2\x01\x00"
+
+		if strings.HasPrefix(decodedStr, prefix) {
+			decodedStr = decodedStr[len(prefix):]
+		}
+		if strings.HasSuffix(decodedStr, suffix) {
+			decodedStr = decodedStr[:len(decodedStr)-len(suffix)]
+		}
+
+		bytesArray := []byte(decodedStr)
+		if len(bytesArray) == 0 {
+			return "", fmt.Errorf("decoded string is empty")
+		}
+		length := int(bytesArray[0])
+		if length >= 0x80 {
+			if len(bytesArray) < 2 {
+				return "", fmt.Errorf("decoded string is too short")
+			}
+			decodedStr = decodedStr[2 : length+1]
+		} else {
+			decodedStr = decodedStr[1 : length+1]
+		}
+
+		if strings.HasPrefix(decodedStr, "AU_yqL") {
+			return fetchDecodedBatchExecute(base64Str)
+		}
+		return decodedStr, nil
+	}
+	return sourceURL, nil
 }
 
 func findAllIndex(s, substr string) []int {
@@ -130,7 +202,14 @@ func CollectNews(topic string, durationHour int) []NewsItem {
 	var newsCollections []NewsItem
 	for _, news := range newsList {
 
-		news.SourceLink = getOriginUrl(news.Link)
+		tmpLink, err := decodeGoogleNewsURL(news.Link)
+
+		if err != nil {
+			news.SourceLink = news.Link
+		} else {
+			news.SourceLink = tmpLink
+		}
+
 		newsapi.FetchSourceContents([]*newsapi.News{news})
 
 		if true {
@@ -157,6 +236,44 @@ func CollectNews(topic string, durationHour int) []NewsItem {
 
 	log.Printf("Collected %d news items", len(newsCollections))
 	return newsCollections
+}
+
+func FixedData(topic string) {
+	client := db.Connect()
+	defer db.Disconnect(client)
+	coll := client.Database("test").Collection(topic)
+	// 查询集合中的所有文档
+	cursor, err := coll.Find(context.TODO(), bson.M{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer cursor.Close(context.TODO())
+
+	for cursor.Next(context.TODO()) {
+		var item NewsItem
+		err := cursor.Decode(&item)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// 检查 link 属性是否为空
+		if item.Link == "" {
+			// 更新文档
+
+			filter := bson.M{"id": item.ID}
+			update := bson.M{"$set": bson.M{"link": "default_link"}} // 将 link 更新为默认值 "default_link"
+			_, err := coll.UpdateOne(context.TODO(), filter, update)
+			if err != nil {
+				log.Fatal(err)
+			}
+			fmt.Printf("Updated document with id: %v\n", item.ID)
+		}
+	}
+
+	if err := cursor.Err(); err != nil {
+		log.Fatal(err)
+	}
+
 }
 
 func InsertData(topic string, data []NewsItem) {
