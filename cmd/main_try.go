@@ -7,9 +7,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"golang.org/x/net/html"
 )
 
 func fetchDecodedBatchExecute(id string) (string, error) {
@@ -135,4 +138,77 @@ func main() {
 		return
 	}
 	fmt.Println(decodedURL)
+
+	// Parse the content of decodedURL
+	resp, err := http.Get(decodedURL)
+	if err != nil {
+		log.Fatalf("Error fetching URL: %v", err)
+	}
+	defer resp.Body.Close()
+
+	doc, err := html.Parse(resp.Body)
+	if err != nil {
+		log.Fatalf("Error parsing HTML: %v", err)
+	}
+
+	// Extract and print the title
+	title := extractTitle(doc)
+	fmt.Printf("Title: %s\n", title)
+
+	// Extract and print the main content
+	content := extractMainContent(doc)
+	fmt.Printf("Content: %s\n", content)
+}
+
+func extractTitle(n *html.Node) string {
+	if n.Type == html.ElementNode && n.Data == "title" {
+		return n.FirstChild.Data
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if title := extractTitle(c); title != "" {
+			return title
+		}
+	}
+	return ""
+}
+
+func extractMainContent(n *html.Node) string {
+	var content strings.Builder
+	var f func(*html.Node)
+	f = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			switch n.Data {
+			case "script", "style", "nav", "header", "footer":
+				return // Skip these elements
+			}
+		}
+		if n.Type == html.TextNode {
+			text := strings.TrimSpace(n.Data)
+			if len(text) > 0 {
+				content.WriteString(text + " ")
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			f(c)
+		}
+	}
+	f(n)
+
+	// Post-processing
+	rawContent := content.String()
+	words := strings.Fields(rawContent)
+	var cleanContent []string
+	for _, word := range words {
+		if len(word) > 1 && !strings.HasPrefix(word, "function") && !strings.HasPrefix(word, "var") {
+			cleanContent = append(cleanContent, word)
+		}
+	}
+
+	// Join words and truncate if necessary
+	result := strings.Join(cleanContent, " ")
+	// if len(result) > 500 {
+	// 	result = result[:497] + "..."
+	// }
+
+	return result
 }

@@ -51,7 +51,7 @@ func GetScore(news string) string {
 		Messages: []Message{
 			{
 				Role:    "user",
-				Content: "请你分析这个关于特斯拉的标题，判断其正面性和负面性，用-5到5的整数表示，-5表示极端负面，5表示极端正面，记住你只返回数字即可：" + news,
+				Content: "请你分析这个关于特斯拉的标题，判断其正面性和负面性，用-5到5的整数表示，-5表示极端负面，5表示极端正面，0表示无关或者没有影响，记住你只返回数字即可：" + news,
 			},
 		},
 		Stream: false,

@@ -12,7 +12,6 @@ import (
 
 func Connect() *mongo.Client {
 	out := viper.GetString("API_KEY")
-
 	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
 	opts := options.Client().ApplyURI(out).SetServerAPIOptions(serverAPI)
 
